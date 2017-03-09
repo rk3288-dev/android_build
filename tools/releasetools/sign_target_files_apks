@@ -179,7 +179,8 @@ def ProcessTargetFiles(input_tf_zip, output_tf_zip, misc_info,
       ReplaceVerityPrivateKey(input_tf_zip, output_tf_zip, misc_info, OPTIONS.replace_verity_private_key[1])
     elif (info.filename == "BOOT/RAMDISK/verity_key" and
         OPTIONS.replace_verity_public_key):
-      ReplaceVerityPublicKey(output_tf_zip, OPTIONS.replace_verity_public_key[1])
+      data = ReplaceVerityPublicKey(output_tf_zip, OPTIONS.replace_verity_public_key[1])
+      write_to_temp(info.filename, info.external_attr, data)
     elif (info.filename.startswith("BOOT/") or
         info.filename.startswith("RECOVERY/") or
         info.filename.startswith("META/") or
@@ -380,7 +381,7 @@ def ReplaceOtaKeys(input_tf_zip, output_tf_zip, misc_info):
   # We DO NOT include the extra_recovery_keys (if any) here.
 
   tempfile = cStringIO.StringIO()
-  certs_zip = zipfile.ZipFile(tempfile, "w")
+  certs_zip = zipfile.ZipFile(tempfile, "w", allowZip64=True)
   for k in mapped_keys:
     certs_zip.write(k)
   certs_zip.close()
@@ -392,7 +393,10 @@ def ReplaceOtaKeys(input_tf_zip, output_tf_zip, misc_info):
 def ReplaceVerityPublicKey(targetfile_zip, key_path):
   print "Replacing verity public key with %s" % key_path
   with open(key_path) as f:
-    common.ZipWriteStr(targetfile_zip, "BOOT/RAMDISK/verity_key", f.read())
+    data = f.read()
+
+  common.ZipWriteStr(targetfile_zip, "BOOT/RAMDISK/verity_key", data)
+  return data
 
 def ReplaceVerityPrivateKey(targetfile_input_zip, targetfile_output_zip, misc_info, key_path):
   print "Replacing verity private key with %s" % key_path
@@ -400,6 +404,7 @@ def ReplaceVerityPrivateKey(targetfile_input_zip, targetfile_output_zip, misc_in
   original_misc_info = targetfile_input_zip.read("META/misc_info.txt")
   new_misc_info = original_misc_info.replace(current_key, key_path)
   common.ZipWriteStr(targetfile_output_zip, "META/misc_info.txt", new_misc_info)
+  misc_info["verity_key"] = key_path
 
 def BuildKeyMap(misc_info, key_mapping_options):
   for s, d in key_mapping_options:
@@ -466,8 +471,8 @@ def main(argv):
     common.Usage(__doc__)
     sys.exit(1)
 
-  input_zip = zipfile.ZipFile(args[0], "r")
-  output_zip = zipfile.ZipFile(args[1], "w")
+  input_zip = zipfile.ZipFile(args[0], "r", allowZip64=True)
+  output_zip = zipfile.ZipFile(args[1], "w", allowZip64=True)
 
   misc_info = common.LoadInfoDict(input_zip)
 

@@ -1790,6 +1790,35 @@ $(hide) if [ -d $(PRIVATE_CLASS_INTERMEDIATES_DIR) ] ; then \
 fi
 endef
 
+# 在 intermediates 目录下, 生成随机的 prt_key_for_PPrK
+#
+define gen-random-prt_key_for_PPrK
+echo -n $$RANDOM > $(prt_key_for_PPrK)
+echo -n $$RANDOM >> $(prt_key_for_PPrK)
+echo -n $$RANDOM >> $(prt_key_for_PPrK)
+endef
+
+# enc platform_PrK, then add keys to apk in assets.
+#
+define add-enced-platform-keys-to-package
+$(hide)# 在 intermediates 目录下创建 assets 目录
+@mkdir -p $(assets_dir)
+# 在 intermediates 目录下, 生成随机的 prt_key_for_PPrK
+$(gen-random-prt_key_for_PPrK)
+# 使用 prt_key_for_PPrK, 对 platform_PrK 加密, 得到 enced_platform_PrK, 保存在 assets 下
+openssl enc -aes-128-cbc -in $(platform_PrK) -out $(enced_platform_PrK) -pass file:$(prt_key_for_PPrK)
+# 使用 PuK_to_enc_PrtK, 对 prt_key_for_PPrK 加密, 得到 enced_PrtK, 保存在 assets 下
+openssl rsautl -encrypt -in $(prt_key_for_PPrK) -inkey $(PuK_to_enc_PrtK) -pubin -out $(enced_PrtK)
+# 将 platform_cert 拷贝到 assets 下
+cp $(platform_cert) $(assets_dir)/platform_cert
+# 将 目录 assets 中的文件都添加到 apk 中.
+{ cd $(intermediate_dir); zip $(notdir $@) assets/*; cd -;}
+# 删除 prt_key_for_PPrK.
+rm $(prt_key_for_PPrK)
+# 删除 目录 assets.
+rm $(assets_dir) -rf
+endef
+
 # Sign a package using the specified key/cert.
 #
 define sign-package
@@ -1887,19 +1916,20 @@ endef
 # Copy a single file from one place to another,
 # preserving permissions and overwriting any existing
 # file.
+# If files are identical then don't copy.
 # We disable the "-t" option for acp cannot handle
 # high resolution timestamp correctly on file systems like ext4.
 # Therefore copy-file-to-target is the same as copy-file-to-new-target.
 define copy-file-to-target
 @mkdir -p $(dir $@)
-$(hide) $(ACP) -fp $< $@
+$(hide)(cmp -s $< $@ ; if [ $$? -ne 0 ] ; then $(ACP) -fp $< $@ ; fi)
 endef
 
 # The same as copy-file-to-target, but use the local
 # cp command instead of acp.
 define copy-file-to-target-with-cp
 @mkdir -p $(dir $@)
-$(hide) cp -fp $< $@
+$(hide)(cmp -s $< $@ ; if [ $$? -ne 0 ] ; then cp -fp $< $@ ; fi)
 endef
 
 # The same as copy-file-to-target, but use the zipalign tool to do so.
@@ -2211,6 +2241,7 @@ include $(BUILD_SYSTEM)/distdir.mk
 
 # Include any vendor specific definitions.mk file
 -include $(TOPDIR)vendor/*/build/core/definitions.mk
+-include $(TOPDIR)device/*/build/core/definitions.mk
 
 # broken:
 #	$(foreach file,$^,$(if $(findstring,.a,$(suffix $file)),-l$(file),$(file)))

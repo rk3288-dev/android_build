@@ -102,6 +102,11 @@ BUILD_KEYS := test-keys
 else
 BUILD_KEYS := dev-keys
 endif
+
+ifeq ($(TARGET_BUILD_VARIANT),user)
+BUILD_KEYS := release-keys
+endif
+
 BUILD_VERSION_TAGS += $(BUILD_KEYS)
 BUILD_VERSION_TAGS := $(subst $(space),$(comma),$(sort $(BUILD_VERSION_TAGS)))
 
@@ -429,16 +434,40 @@ ifneq ($(strip $(TARGET_NO_BOOTLOADER)),true)
   ifeq ($(strip $(TARGET_BOOTLOADER_IS_2ND)),true)
     INSTALLED_2NDBOOTLOADER_TARGET := $(PRODUCT_OUT)/2ndbootloader
   else
-    INSTALLED_2NDBOOTLOADER_TARGET :=
+    INSTALLED_2NDBOOTLOADER_TARGET ?=
   endif
 else
   INSTALLED_BOOTLOADER_MODULE :=
-  INSTALLED_2NDBOOTLOADER_TARGET :=
+  INSTALLED_2NDBOOTLOADER_TARGET ?=
 endif # TARGET_NO_BOOTLOADER
 ifneq ($(strip $(TARGET_NO_KERNEL)),true)
   INSTALLED_KERNEL_TARGET := $(PRODUCT_OUT)/kernel
 else
   INSTALLED_KERNEL_TARGET :=
+endif
+
+ifeq ($(TARGET_BOARD_PLATFORM),sofia3gr)
+ifeq ($(strip $(TARGET_BOOTLOADER_IS_2ND)),true)
+ifneq ($(INSTALLED_2NDBOOTLOADER_TARGET), $(wildcard $(INSTALLED_2NDBOOTLOADER_TARGET)))
+$(INSTALLED_2NDBOOTLOADER_TARGET):
+	@echo "TODO" > $(INSTALLED_2NDBOOTLOADER_TARGET)
+endif
+
+
+ifneq ($(INSTALLED_2NDBOOTLOADER_RECOVERY_TARGET), $(wildcard $(INSTALLED_2NDBOOTLOADER_RECOVERY_TARGET)))
+$(INSTALLED_2NDBOOTLOADER_RECOVERY_TARGET):
+	@echo "TODO" > $(INSTALLED_2NDBOOTLOADER_RECOVERY_TARGET)	
+endif
+
+endif
+
+ifeq ($(strip $(TARGET_BOOTLOADER_IS_3ND)),true)	
+ifneq ($(INSTALLED_3NDBOOTLOADER_TARGET), $(wildcard $(INSTALLED_3NDBOOTLOADER_TARGET)))
+$(INSTALLED_3NDBOOTLOADER_TARGET):
+	@echo "TODO" > $(INSTALLED_3NDBOOTLOADER_TARGET)
+endif
+endif
+
 endif
 
 # -----------------------------------------------------------------
@@ -467,9 +496,20 @@ ifneq ($(strip $(TARGET_NO_KERNEL)),true)
 # -----------------------------------------------------------------
 # the boot image, which is a collection of other images.
 INTERNAL_BOOTIMAGE_ARGS := \
-	$(addprefix --second ,$(INSTALLED_2NDBOOTLOADER_TARGET)) \
 	--kernel $(INSTALLED_KERNEL_TARGET) \
 	--ramdisk $(INSTALLED_RAMDISK_TARGET)
+
+ifeq ($(strip $(TARGET_BOOTLOADER_IS_2ND)),true)
+INTERNAL_BOOTIMAGE_ARGS += \
+    $(addprefix --second ,$(INSTALLED_2NDBOOTLOADER_TARGET))
+endif
+
+ifeq ($(TARGET_BOARD_PLATFORM),sofia3gr)
+ifeq ($(strip $(TARGET_BOOTLOADER_IS_3ND)),true)
+	INTERNAL_BOOTIMAGE_ARGS += \
+    	$(addprefix --third ,$(INSTALLED_3NDBOOTLOADER_TARGET))
+endif
+endif
 
 INTERNAL_BOOTIMAGE_FILES := $(filter-out --%,$(INTERNAL_BOOTIMAGE_ARGS))
 
@@ -546,6 +586,18 @@ else	# TARGET_NO_KERNEL
 #       kernel-less inputs.
 INSTALLED_BOOTIMAGE_TARGET := $(INSTALLED_RAMDISK_TARGET)
 endif
+
+# -----------------------------------------------------------------
+# the rk loader bin
+INSTALLED_LOADER_MISC_TARGET := $(TARGET_DEVICE_DIR)/loader/misc_loadercmd.img
+INSTALLED_LOADER_TARGET := $(strip $(wildcard $(TARGET_DEVICE_DIR)/loader/RK*Loader*.bin))
+INSTALLED_NEW_LOADER_TARGET := $(PRODUCT_OUT)/RKLoader_new.bin
+INSTALLED_UBOOT_TARGET := $(strip $(wildcard u-boot/uboot.img))
+INSTALLED_CHARGE_TARGET := $(strip $(wildcard u-boot/charge.img))
+INSTALLED_TRUST_TARHET := $(strip $(wildcard u-boot/trust.img))
+# -----------------------------------------------------------------
+# the parameter image 
+INSTALLED_PARAMETER_TARGET := $(strip $(wildcard $(TARGET_DEVICE_DIR)/parameter/parameter*))
 
 # -----------------------------------------------------------------
 # NOTICE files
@@ -653,10 +705,10 @@ $(kernel_notice_file): \
 # before the rules that use that variable to build the image.
 ALL_DEFAULT_INSTALLED_MODULES += $(TARGET_OUT_ETC)/security/otacerts.zip
 $(TARGET_OUT_ETC)/security/otacerts.zip: KEY_CERT_PAIR := $(DEFAULT_KEY_CERT_PAIR)
-$(TARGET_OUT_ETC)/security/otacerts.zip: $(addsuffix .x509.pem,$(DEFAULT_KEY_CERT_PAIR))
+$(TARGET_OUT_ETC)/security/otacerts.zip: $(addsuffix .x509.pem,$(DEFAULT_KEY_CERT_PAIR)) $(RADICAL_UPDATE_CERT)
 	$(hide) rm -f $@
 	$(hide) mkdir -p $(dir $@)
-	$(hide) zip -qj $@ $<
+	$(hide) zip -qj $@ $^
 
 .PHONY: otacerts
 otacerts: $(TARGET_OUT_ETC)/security/otacerts.zip
@@ -747,11 +799,20 @@ ifeq (,$(filter true, $(TARGET_NO_KERNEL) $(TARGET_NO_RECOVERY)))
 INSTALLED_RECOVERYIMAGE_TARGET := $(PRODUCT_OUT)/recovery.img
 
 recovery_initrc := $(call include-path-for, recovery)/etc/init.rc
+recovery_initrc_private := $(TARGET_DEVICE_DIR)/recovery/etc/init.rc
+recovery_initrc_private := $(if $(wildcard $(recovery_initrc_private)), $(recovery_initrc_private),\
+    device/rockchip/common/recovery/etc/init.rc)
+recovery_initrc_emmc_private := $(TARGET_DEVICE_DIR)/recovery/etc/init.bootmode.emmc.rc
+recovery_initrc_emmc_private := $(if $(wildcard $(recovery_initrc_emmc_private)), $(recovery_initrc_emmc_private),\
+    device/rockchip/common/recovery/etc/init.bootmode.emmc.rc)
+recovery_initrc_mtd_private := $(TARGET_DEVICE_DIR)/recovery/etc/init.bootmode.unknown.rc
+recovery_initrc_mtd_private := $(if $(wildcard $(recovery_initrc_mtd_private)), $(recovery_initrc_mtd_private),\
+    device/rockchip/common/recovery/etc/init.bootmode.unknown.rc)
 recovery_sepolicy := $(call intermediates-dir-for,ETC,sepolicy.recovery)/sepolicy.recovery
 recovery_kernel := $(INSTALLED_KERNEL_TARGET) # same as a non-recovery system
 recovery_ramdisk := $(PRODUCT_OUT)/ramdisk-recovery.img
 recovery_build_prop := $(INSTALLED_BUILD_PROP_TARGET)
-recovery_binary := $(call intermediates-dir-for,EXECUTABLES,recovery)/recovery
+recovery_binary := $(call intermediates-dir-for,EXECUTABLES,recovery,,,$(TARGET_PREFER_32_BIT))/recovery
 recovery_resources_common := $(call include-path-for, recovery)/res
 
 # Set recovery_density to the density bucket of the device.
@@ -782,28 +843,63 @@ recovery_font := $(call include-path-for, recovery)/fonts/12x22.png
 endif
 
 recovery_resources_private := $(strip $(wildcard $(TARGET_DEVICE_DIR)/recovery/res))
+recovery_resources_private := $(if $(wildcard $(recovery_resources_private)), $(recovery_resources_private),\
+    device/rockchip/common/recovery/res)
 recovery_resource_deps := $(shell find $(recovery_resources_common) \
   $(recovery_resources_private) -type f)
 ifdef TARGET_RECOVERY_FSTAB
 recovery_fstab := $(TARGET_RECOVERY_FSTAB)
+#---------------- TARGET_BOARD_PLATFORM
+ifeq ($(TARGET_BOARD_PLATFORM),sofia3gr)
+TARGET_FSTAB_RECOVERY_NAME_EMMC := recovery.fstab_emmc
+TARGET_FSTAB_RECOVERY_NAME_NAND := recovery.fstab_nand
+recovery_fstab_mtd := $(TARGET_RECOVERY_FSTAB_NAND)
 else
-recovery_fstab := $(strip $(wildcard $(TARGET_DEVICE_DIR)/recovery.fstab))
+TARGET_FSTAB_RECOVERY_NAME_EMMC := recovery.fstab
+TARGET_FSTAB_RECOVERY_NAME_NAND := recovery.fstab
+recovery_fstab_mtd := $(TARGET_RECOVERY_FSTAB)
 endif
+#---------------- TARGET_BOARD_PLATFORM
+else
+recovery_fstab :=
+recovery_fstab_mtd := $(strip $(wildcard $(TARGET_DEVICE_DIR)/recovery.fstab))
+recovery_fstab_mtd := $(if $(wildcard $(recovery_fstab_mtd)), $(recovery_fstab_mtd),\
+    device/rockchip/common/recovery.fstab)
+recovery_fstab_emmc := $(strip $(wildcard $(TARGET_DEVICE_DIR)/recovery.emmc.fstab))
+recovery_fstab_emmc := $(if $(wildcard $(recovery_fstab_emmc)), $(recovery_fstab_emmc),\
+    device/rockchip/common/recovery.emmc.fstab)
+endif
+
+ifneq ($(strip $(TARGET_BOARD_PLATFORM)),sofia3gr)
 # Named '.dat' so we don't attempt to use imgdiff for patching it.
 RECOVERY_RESOURCE_ZIP := $(TARGET_OUT)/etc/recovery-resource.dat
+endif
+
+ifeq ($(TARGET_ROCKCHIP_PCBATEST),true)
+pcba_core := $(call intermediates-dir-for,EXECUTABLES,pcba_core)/pcba_core
+recovery_contents := $(TOPDIR)device/rockchip/common/recovery_contents.sh
+else
+recovery_contents := $(TOPDIR)device/rockchip/common/recovery_contents.sh
+endif
 
 ifeq ($(recovery_resources_private),)
   $(info No private recovery resources for TARGET_DEVICE $(TARGET_DEVICE))
 endif
 
+ifeq ($(recovery_fstab_mtd),)
 ifeq ($(recovery_fstab),)
   $(info No recovery.fstab for TARGET_DEVICE $(TARGET_DEVICE))
 endif
+endif
 
 INTERNAL_RECOVERYIMAGE_ARGS := \
-	$(addprefix --second ,$(INSTALLED_2NDBOOTLOADER_TARGET)) \
 	--kernel $(recovery_kernel) \
 	--ramdisk $(recovery_ramdisk)
+
+ifeq ($(strip $(TARGET_BOOTLOADER_IS_2ND)),true)
+INTERNAL_RECOVERYIMAGE_ARGS += \
+    $(addprefix --second ,$(INSTALLED_2NDBOOTLOADER_TARGET))
+endif
 
 # Assumes this has already been stripped
 ifdef BOARD_KERNEL_CMDLINE
@@ -821,6 +917,11 @@ endif
 # build always uses dev-keys for this; release packaging tools will
 # substitute other keys for this one.
 OTA_PUBLIC_KEYS := $(DEFAULT_SYSTEM_DEV_CERTIFICATE).x509.pem
+ifeq ($(RECOVERY_UPDATEIMG_RSA_CHECK),true)
+RK_PUBLIC_KEY := build/target/product/security/publicKey.bin
+else
+RK_PUBLIC_KEY :=
+endif
 
 # Generate a file containing the keys that will be read by the
 # recovery binary.
@@ -829,21 +930,30 @@ RECOVERY_INSTALL_OTA_KEYS := \
 DUMPKEY_JAR := $(HOST_OUT_JAVA_LIBRARIES)/dumpkey.jar
 $(RECOVERY_INSTALL_OTA_KEYS): PRIVATE_OTA_PUBLIC_KEYS := $(OTA_PUBLIC_KEYS)
 $(RECOVERY_INSTALL_OTA_KEYS): extra_keys := $(patsubst %,%.x509.pem,$(PRODUCT_EXTRA_RECOVERY_KEYS))
-$(RECOVERY_INSTALL_OTA_KEYS): $(OTA_PUBLIC_KEYS) $(DUMPKEY_JAR) $(extra_keys)
+$(RECOVERY_INSTALL_OTA_KEYS): $(OTA_PUBLIC_KEYS) $(DUMPKEY_JAR) $(extra_keys) $(RK_PUBLIC_KEY) $(RADICAL_UPDATE_CERT)
 	@echo "DumpPublicKey: $@ <= $(PRIVATE_OTA_PUBLIC_KEYS) $(extra_keys)"
 	@rm -rf $@
 	@mkdir -p $(dir $@)
-	java -jar $(DUMPKEY_JAR) $(PRIVATE_OTA_PUBLIC_KEYS) $(extra_keys) > $@
+	java -jar $(DUMPKEY_JAR) $(PRIVATE_OTA_PUBLIC_KEYS) $(extra_keys) $(RADICAL_UPDATE_CERT) > $@
 
+ifeq ($(strip $(TARGET_BOOTLOADER_IS_2ND)),true)
+ifeq ($(TARGET_BOARD_PLATFORM),sofia3gr)
+$(INSTALLED_RECOVERYIMAGE_TARGET): $(INSTALLED_2NDBOOTLOADER_RECOVERY_TARGET)
+else
+$(INSTALLED_RECOVERYIMAGE_TARGET): $(INSTALLED_2NDBOOTLOADER_TARGET)
+endif
+endif
 $(INSTALLED_RECOVERYIMAGE_TARGET): $(MKBOOTFS) $(MKBOOTIMG) $(MINIGZIP) \
 		$(INSTALLED_RAMDISK_TARGET) \
 		$(INSTALLED_BOOTIMAGE_TARGET) \
 		$(recovery_binary) \
 		$(recovery_initrc) $(recovery_sepolicy) $(recovery_kernel) \
-		$(INSTALLED_2NDBOOTLOADER_TARGET) \
 		$(recovery_build_prop) $(recovery_resource_deps) \
 		$(recovery_fstab) \
-		$(RECOVERY_INSTALL_OTA_KEYS)
+		$(recovery_fstab_mtd) \
+		$(recovery_fstab_emmc) \
+		$(RECOVERY_INSTALL_OTA_KEYS) \
+		$(pcba_core)
 	@echo ----- Making recovery image ------
 	$(hide) rm -rf $(TARGET_RECOVERY_OUT)
 	$(hide) mkdir -p $(TARGET_RECOVERY_OUT)
@@ -856,16 +966,27 @@ $(INSTALLED_RECOVERYIMAGE_TARGET): $(MKBOOTFS) $(MKBOOTIMG) $(MINIGZIP) \
 	$(hide) rm -f $(TARGET_RECOVERY_ROOT_OUT)/sepolicy
 	$(hide) cp -f $(recovery_sepolicy) $(TARGET_RECOVERY_ROOT_OUT)/sepolicy
 	$(hide) -cp $(TARGET_ROOT_OUT)/init.recovery.*.rc $(TARGET_RECOVERY_ROOT_OUT)/
+	$(hide)cp -f $(recovery_initrc_private) $(TARGET_RECOVERY_ROOT_OUT)/
+	$(hide)cp -f $(recovery_initrc_emmc_private) $(TARGET_RECOVERY_ROOT_OUT)/
+	$(hide)cp -f $(recovery_initrc_mtd_private) $(TARGET_RECOVERY_ROOT_OUT)/
 	$(hide) cp -f $(recovery_binary) $(TARGET_RECOVERY_ROOT_OUT)/sbin/
 	$(hide) mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/res
 	$(hide) rm -rf $(TARGET_RECOVERY_ROOT_OUT)/res/*
 	$(hide) cp -rf $(recovery_resources_common)/* $(TARGET_RECOVERY_ROOT_OUT)/res
 	$(hide) cp -f $(recovery_font) $(TARGET_RECOVERY_ROOT_OUT)/res/images/font.png
+	$(recovery_contents) $(TARGET_PRODUCT) $(PRODUCT_OUT) $(TARGET_BOARD_PLATFORM) $(TARGET_ROCKCHIP_PCBATEST) $(TARGET_ARCH)
 	$(hide) $(foreach item,$(recovery_resources_private), \
 	  cp -rf $(item) $(TARGET_RECOVERY_ROOT_OUT)/)
 	$(hide) $(foreach item,$(recovery_fstab), \
-	  cp -f $(item) $(TARGET_RECOVERY_ROOT_OUT)/etc/recovery.fstab)
+	  cp -f $(item) $(TARGET_RECOVERY_ROOT_OUT)/etc/$(TARGET_FSTAB_RECOVERY_NAME_EMMC))
+	$(hide) $(foreach item,$(recovery_fstab_mtd), \
+	  cp -f $(item) $(TARGET_RECOVERY_ROOT_OUT)/etc/$(TARGET_FSTAB_RECOVERY_NAME_NAND))
+	$(hide) $(foreach item,$(recovery_fstab_emmc), \
+	  cp -f $(item) $(TARGET_RECOVERY_ROOT_OUT)/etc/recovery.emmc.fstab)
 	$(hide) cp $(RECOVERY_INSTALL_OTA_KEYS) $(TARGET_RECOVERY_ROOT_OUT)/res/keys
+ifeq ($(RECOVERY_UPDATEIMG_RSA_CHECK),true)
+	cp  $(RK_PUBLIC_KEY) $(TARGET_RECOVERY_ROOT_OUT)/res/
+endif
 	$(hide) cat $(INSTALLED_DEFAULT_PROP_TARGET) $(recovery_build_prop) \
 	        > $(TARGET_RECOVERY_ROOT_OUT)/default.prop
 	$(hide) $(MKBOOTFS) $(TARGET_RECOVERY_ROOT_OUT) | $(MINIGZIP) > $(recovery_ramdisk)
@@ -878,7 +999,8 @@ endif
 
 $(RECOVERY_RESOURCE_ZIP): $(INSTALLED_RECOVERYIMAGE_TARGET)
 	$(hide) mkdir -p $(dir $@)
-	$(hide) find $(TARGET_RECOVERY_ROOT_OUT)/res -type f | sort | zip -0qrj $@ -@
+	@echo "the @ is: $@"
+	$(hide) find $(TARGET_RECOVERY_ROOT_OUT)/res -type f | sort #| zip -0qrj $@ -@
 
 else
 INSTALLED_RECOVERYIMAGE_TARGET :=
@@ -1249,6 +1371,10 @@ ifeq ($(TARGET_USE_DISKINSTALLER),true)
 include bootable/diskinstaller/config.mk
 endif
 
+ifeq ($(strip $(TARGET_USE_USERFASTBOOT)),true)
+include bootable/userfastboot/ramdisk.mk
+endif
+
 # -----------------------------------------------------------------
 # host tools needed to build dist and OTA packages
 
@@ -1260,6 +1386,9 @@ DISTTOOLS :=  $(HOST_OUT_EXECUTABLES)/minigzip \
 	  $(HOST_OUT_EXECUTABLES)/zipalign \
 	  $(HOST_OUT_EXECUTABLES)/bsdiff \
 	  $(HOST_OUT_EXECUTABLES)/imgdiff \
+	  $(HOST_OUT_EXECUTABLES)/remkloader \
+	  $(HOST_OUT_EXECUTABLES)/mkparameter \
+	  $(HOST_OUT_EXECUTABLES)/drmsigntool \
 	  $(HOST_OUT_JAVA_LIBRARIES)/dumpkey.jar \
 	  $(HOST_OUT_JAVA_LIBRARIES)/signapk.jar \
 	  $(HOST_OUT_EXECUTABLES)/mkuserimg.sh \
@@ -1305,11 +1434,11 @@ define package_files-copy-root
 endef
 
 built_ota_tools := \
-	$(call intermediates-dir-for,EXECUTABLES,applypatch)/applypatch \
-	$(call intermediates-dir-for,EXECUTABLES,applypatch_static)/applypatch_static \
-	$(call intermediates-dir-for,EXECUTABLES,check_prereq)/check_prereq \
-	$(call intermediates-dir-for,EXECUTABLES,sqlite3)/sqlite3 \
-	$(call intermediates-dir-for,EXECUTABLES,updater)/updater
+	$(call intermediates-dir-for,EXECUTABLES,applypatch,,,$(TARGET_PREFER_32_BIT))/applypatch \
+	$(call intermediates-dir-for,EXECUTABLES,applypatch_static,,,$(TARGET_PREFER_32_BIT))/applypatch_static \
+	$(call intermediates-dir-for,EXECUTABLES,check_prereq,,,$(TARGET_PREFER_32_BIT))/check_prereq \
+	$(call intermediates-dir-for,EXECUTABLES,sqlite3,,,$(TARGET_PREFER_32_BIT))/sqlite3 \
+	$(call intermediates-dir-for,EXECUTABLES,updater,,,$(TARGET_PREFER_32_BIT))/updater
 $(BUILT_TARGET_FILES_PACKAGE): PRIVATE_OTA_TOOLS := $(built_ota_tools)
 
 $(BUILT_TARGET_FILES_PACKAGE): PRIVATE_RECOVERY_API_VERSION := $(RECOVERY_API_VERSION)
@@ -1327,6 +1456,10 @@ endif
 $(BUILT_TARGET_FILES_PACKAGE): \
 		$(INSTALLED_BOOTIMAGE_TARGET) \
 		$(INSTALLED_RADIOIMAGE_TARGET) \
+		$(INSTALLED_LOADER_TARGET) \
+		$(INSTALLED_UBOOT_TARGET) \
+		$(INSTALLED_CHARGE_TARGET) \
+		$(INSTALLED_PARAMETER_TARGET) \
 		$(INSTALLED_RECOVERYIMAGE_TARGET) \
 		$(INSTALLED_SYSTEMIMAGE) \
 		$(INSTALLED_USERDATAIMAGE_TARGET) \
@@ -1349,8 +1482,13 @@ ifdef INSTALLED_KERNEL_TARGET
 	$(hide) $(ACP) $(INSTALLED_KERNEL_TARGET) $(zip_root)/RECOVERY/kernel
 endif
 ifdef INSTALLED_2NDBOOTLOADER_TARGET
+ifeq ($(TARGET_BOARD_PLATFORM),sofia3gr)
+	$(hide) $(ACP) \
+		$(INSTALLED_2NDBOOTLOADER_RECOVERY_TARGET) $(zip_root)/RECOVERY/second
+else
 	$(hide) $(ACP) \
 		$(INSTALLED_2NDBOOTLOADER_TARGET) $(zip_root)/RECOVERY/second
+endif
 endif
 ifdef BOARD_KERNEL_CMDLINE
 	$(hide) echo "$(BOARD_KERNEL_CMDLINE)" > $(zip_root)/RECOVERY/cmdline
@@ -1372,6 +1510,14 @@ ifdef INSTALLED_2NDBOOTLOADER_TARGET
 	$(hide) $(ACP) \
 		$(INSTALLED_2NDBOOTLOADER_TARGET) $(zip_root)/BOOT/second
 endif
+
+ifdef INSTALLED_3NDBOOTLOADER_TARGET
+ifeq ($(TARGET_BOARD_PLATFORM),sofia3gr)
+	$(hide) $(ACP) \
+		$(INSTALLED_3NDBOOTLOADER_TARGET) $(zip_root)/BOOT/third
+endif
+endif
+
 ifdef BOARD_KERNEL_CMDLINE
 	$(hide) echo "$(BOARD_KERNEL_CMDLINE)" > $(zip_root)/BOOT/cmdline
 endif
@@ -1384,6 +1530,47 @@ endif
 	$(hide) $(foreach t,$(INSTALLED_RADIOIMAGE_TARGET),\
 	            mkdir -p $(zip_root)/RADIO; \
 	            $(ACP) $(t) $(zip_root)/RADIO/$(notdir $(t));)
+ifeq ($(INSTALLED_LOADER_TARGET),)
+	$(info No RK Loader for TARGET_DEVICE $(TARGET_DEVICE) to otapackage)
+else
+	@# Contents of the rk loader bin
+	$(hide) mkdir -p $(zip_root)/LOADER
+	$(hide) $(HOST_OUT_EXECUTABLES)/remkloader '$(INSTALLED_LOADER_TARGET)' $(INSTALLED_NEW_LOADER_TARGET)
+	$(hide) cat $(INSTALLED_LOADER_MISC_TARGET) $(INSTALLED_NEW_LOADER_TARGET) > $(zip_root)/LOADER/RKLoader.img 
+endif
+
+ifdef TARGET_PREBUILT_RESOURCE
+	$(info package add resource.img to BOOT and RECOVERY)
+	$(hide) cp $(TARGET_PREBUILT_RESOURCE) $(zip_root)/BOOT/resource.img
+	$(hide) cp $(TARGET_PREBUILT_RESOURCE) $(zip_root)/RECOVERY/resource.img
+endif
+
+ifeq ($(INSTALLED_UBOOT_TARGET),)
+	$(info No uboot for uboot/uboot.img to otapackage)
+else
+	$(hide) cp $(INSTALLED_UBOOT_TARGET) $(zip_root)/uboot.img
+endif
+
+ifeq ($(INSTALLED_TRUST_TARHET),)
+	$(info No trust for uboot/trust.img to otapackage)
+else
+	$(hide) cp $(INSTALLED_TRUST_TARHET) $(zip_root)/trust.img
+endif
+
+ifeq ($(INSTALLED_CHARGE_TARGET),)
+	$(info No charge for uboot/charge.img to otapackage)
+else
+	$(hide) cp $(INSTALLED_CHARGE_TARGET) $(zip_root)/charge.img
+endif
+
+ifeq ($(INSTALLED_PARAMETER_TARGET),)
+	$(info No parameter for TARGET_DEVICE $(TARGET_DEVICE) to otapackage)
+else
+	$(hide) rm -rf $(zip_root)/PARAMETER
+	$(hide) mkdir -p $(zip_root)/PARAMETER
+	$(hide) $(HOST_OUT_EXECUTABLES)/mkparameter '$(INSTALLED_PARAMETER_TARGET)' $(zip_root)/PARAMETER/parameter
+endif	
+
 	@# Contents of the system image
 	$(hide) $(call package_files-copy-root, \
 		$(SYSTEMIMAGE_SOURCE_DIR),$(zip_root)/SYSTEM)
@@ -1422,7 +1609,7 @@ ifdef TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS
 else
 	$(hide) echo "recovery_mount_options=$(DEFAULT_TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS)" >> $(zip_root)/META/misc_info.txt
 endif
-	$(hide) echo "tool_extensions=$(tool_extensions)" >> $(zip_root)/META/misc_info.txt
+	$(hide) echo "tool_extensions=$(tool_extensions)/releasetools.py" >> $(zip_root)/META/misc_info.txt
 	$(hide) echo "default_system_dev_certificate=$(DEFAULT_SYSTEM_DEV_CERTIFICATE)" >> $(zip_root)/META/misc_info.txt
 ifdef PRODUCT_EXTRA_RECOVERY_KEYS
 	$(hide) echo "extra_recovery_keys=$(PRODUCT_EXTRA_RECOVERY_KEYS)" >> $(zip_root)/META/misc_info.txt
@@ -1437,7 +1624,9 @@ ifneq ($(OEM_THUMBPRINT_PROPERTIES),)
 	$(hide) echo "oem_fingerprint_properties=$(OEM_THUMBPRINT_PROPERTIES)" >> $(zip_root)/META/misc_info.txt
 endif
 	$(call generate-userimage-prop-dictionary, $(zip_root)/META/misc_info.txt)
+ifneq ($(strip $(TARGET_BOARD_PLATFORM)),sofia3gr)
 	$(hide) ./build/tools/releasetools/make_recovery_patch $(zip_root) $(zip_root)
+endif
 	@# Zip everything up, preserving symlinks
 	$(hide) (cd $(zip_root) && zip -qry ../$(notdir $@) .)
 	@# Run fs_config on all the system, vendor, boot ramdisk,
@@ -1459,7 +1648,7 @@ endif
 ifneq ($(TARGET_PRODUCT),sdk)
 ifeq ($(filter generic%,$(TARGET_DEVICE)),)
 ifneq ($(TARGET_NO_KERNEL),true)
-ifneq ($(recovery_fstab),)
+ifneq ($(recovery_fstab_mtd),)
 
 # -----------------------------------------------------------------
 # OTA update package
@@ -1478,7 +1667,6 @@ $(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) $(DISTTOOLS)
 	@echo "Package OTA: $@"
 	$(hide) MKBOOTIMG=$(MKBOOTIMG) \
 	   ./build/tools/releasetools/ota_from_target_files -v \
-	   --block \
 	   -p $(HOST_OUT) \
 	   -k $(KEY_CERT_PAIR) \
 	   $(if $(OEM_OTA_CONFIG), -o $(OEM_OTA_CONFIG)) \

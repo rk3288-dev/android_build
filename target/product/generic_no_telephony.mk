@@ -21,13 +21,27 @@ PRODUCT_PACKAGES := \
     Bluetooth \
     Camera2 \
     Gallery2 \
-    Music \
     MusicFX \
     OneTimeInitializer \
     Provision \
-    SystemUI \
     WallpaperCropper
 
+  #$_rbox_$_modify_$_by lly,low memory disable SystemUI    
+ifneq ($(strip $(TARGET_BOARD_PLATFORM_PRODUCT)), box)
+PRODUCT_PACKAGES += \
+    Music	\
+    SystemUI     
+endif
+ifeq ($(strip $(TARGET_BOARD_PLATFORM_PRODUCT)), box)
+  ifeq ($(strip $(BOARD_USE_LOW_MEM)), true)
+  PRODUCT_PACKAGES += \
+      SimpleSystemUI 
+  else
+  PRODUCT_PACKAGES += \
+      SystemUI     
+  endif
+endif
+  #$_rbox_$_modify_$_end
 PRODUCT_PACKAGES += \
     clatd \
     clatd.conf \

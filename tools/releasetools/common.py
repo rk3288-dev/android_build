@@ -1,3 +1,4 @@
+# coding=utf8
 # Copyright (C) 2008 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +38,10 @@ try:
 except ImportError:
   from sha import sha as sha1
 
+from custom_log import D
+from custom_log import I
+from custom_log import W
+
 # missing in Python 2.4 and before
 if not hasattr(os, "SEEK_SET"):
   os.SEEK_SET = 0
@@ -58,8 +63,10 @@ OPTIONS.public_key_suffix = ".x509.pem"
 OPTIONS.private_key_suffix = ".pk8"
 OPTIONS.verbose = False
 OPTIONS.tempfiles = []
+# 将存储设备定制操作模块的路径字串. RK32_SDK 中 device/rockchip/rksdk/, 模块是 device/rockchip/rksdk/releasetools.pyc.
 OPTIONS.device_specific = None
 OPTIONS.extras = {}
+# 将引用字典对象, 参见 LoadInfoDict().
 OPTIONS.info_dict = None
 
 
@@ -74,7 +81,8 @@ def Run(args, **kwargs):
   """Create and return a subprocess.Popen object, printing the command
   line on the terminal if -v was specified."""
   if OPTIONS.verbose:
-    print "  running: ", " ".join(args)
+    # print "  running: ", " ".join(args)
+    I("  running: %s", " ".join(args) )
   return subprocess.Popen(args, **kwargs)
 
 
@@ -97,6 +105,7 @@ def CloseInheritedPipes():
 def LoadInfoDict(input):
   """Read and parse the META/misc_info.txt key/value pairs from the
   input target files and return a dict."""
+  # input_zip 中的 META/misc_info.txt 的内容, 在 make otapackage 过程中, 将 "tool_extensions" 这样的 key 和对应的 value (对应 make 变量的 value) 写入得到.
 
   def read_helper(fn):
     if isinstance(input, zipfile.ZipFile):
@@ -170,6 +179,7 @@ def LoadInfoDict(input):
   makeint("boot_size")
   makeint("fstab_version")
 
+  D("to load recovery FS table(fstabi).")
   d["fstab"] = LoadRecoveryFSTab(read_helper, d["fstab_version"])
   d["build.prop"] = LoadBuildProp(read_helper)
   return d
@@ -200,7 +210,8 @@ def LoadRecoveryFSTab(read_helper, fstab_version):
     data = read_helper("RECOVERY/RAMDISK/etc/recovery.fstab")
   except KeyError:
     print "Warning: could not find RECOVERY/RAMDISK/etc/recovery.fstab"
-    data = ""
+    print "Warning: try RECOVERY/RAMDISK/etc/recovery.fstab_emmc"
+    data = read_helper("RECOVERY/RAMDISK/etc/recovery.fstab_emmc")
 
   if fstab_version == 1:
     d = {}
@@ -308,12 +319,17 @@ def BuildBootableImage(sourcedir, fs_config_file, info_dict=None):
   assert p1.returncode == 0, "mkbootfs of %s ramdisk failed" % (targetname,)
   assert p2.returncode == 0, "minigzip of %s ramdisk failed" % (targetname,)
 
+  cmd = ["truncate", "-s", "%4", ramdisk_img.name]
+  p3 = Run(cmd)
+  p3.communicate()
+  assert p3.returncode == 0, "truncate ramdisk failed"
+
   # use MKBOOTIMG from environ, or "mkbootimg" if empty or not set
   mkbootimg = os.getenv('MKBOOTIMG') or "mkbootimg"
 
   cmd = [mkbootimg, "--kernel", os.path.join(sourcedir, "kernel")]
 
-  fn = os.path.join(sourcedir, "second")
+  fn = os.path.join(sourcedir, "resource.img")
   if os.access(fn, os.F_OK):
     cmd.append("--second")
     cmd.append(fn)
@@ -332,6 +348,17 @@ def BuildBootableImage(sourcedir, fs_config_file, info_dict=None):
   if os.access(fn, os.F_OK):
     cmd.append("--pagesize")
     cmd.append(open(fn).read().rstrip("\n"))
+  
+  fn = os.path.join(sourcedir, "second")
+  if os.access(fn, os.F_OK):
+    cmd.append("--second")
+    cmd.append(fn)
+
+
+  fn = os.path.join(sourcedir, "third")
+  if os.access(fn, os.F_OK):
+    cmd.append("--third")
+    cmd.append(fn)
 
   args = info_dict.get("mkbootimg_args", None)
   if args and args.strip():
@@ -345,12 +372,18 @@ def BuildBootableImage(sourcedir, fs_config_file, info_dict=None):
   assert p.returncode == 0, "mkbootimg of %s image failed" % (
       os.path.basename(sourcedir),)
 
-  if info_dict.get("verity_key", None):
-    path = "/" + os.path.basename(sourcedir).lower()
-    cmd = ["boot_signer", path, img.name, info_dict["verity_key"] + ".pk8", info_dict["verity_key"] + ".x509.pem", img.name]
-    p = Run(cmd, stdout=subprocess.PIPE)
-    p.communicate()
-    assert p.returncode == 0, "boot_signer of %s image failed" % path
+  sign_cmd = ["drmsigntool", img.name, "build/target/product/security/privateKey.bin"]
+  p4 = Run(sign_cmd)
+  p4.communicate()
+  assert p4.returncode == 0, "mkbootimg of %s image failed" % (
+          os.path.basename(sourcedir),)
+
+  #if info_dict.get("verity_key", None):
+  #  path = "/" + os.path.basename(sourcedir).lower()
+  #  cmd = ["boot_signer", path, img.name, info_dict["verity_key"] + ".pk8", info_dict["verity_key"] + ".x509.pem", img.name]
+  #  p = Run(cmd, stdout=subprocess.PIPE)
+  #  p.communicate()
+  #  assert p.returncode == 0, "boot_signer of %s image failed" % path
 
   img.seek(os.SEEK_SET, 0)
   data = img.read()
@@ -399,7 +432,7 @@ def UnzipTemp(filename, pattern=None):
   main file), open for reading.
   """
 
-  tmp = tempfile.mkdtemp(prefix="targetfiles-")
+  tmp = tempfile.mkdtemp(prefix="targetfiles-")		# 返回的 tmp 值诸如 '/tmp/targetfiles-mJpYea'
   OPTIONS.tempfiles.append(tmp)
 
   def unzip_to_dir(filename, dirname):
@@ -420,7 +453,7 @@ def UnzipTemp(filename, pattern=None):
   else:
     unzip_to_dir(filename, tmp)
 
-  return tmp, zipfile.ZipFile(filename, "r")
+  return tmp, zipfile.ZipFile(filename, "r", allowZip64=True)
 
 
 def GetKeyPasswords(keylist):
@@ -616,7 +649,7 @@ def ParseOptions(argv,
   extra_option_handler."""
 
   try:
-    opts, args = getopt.getopt(
+    opts, args = getopt.getopt(					# args 中将返回 argv 中非 option 的 program arguments.
         argv, "hvp:s:x:" + extra_opts,
         ["help", "verbose", "path=", "signapk_path=", "extra_signapk_args=",
          "java_path=", "java_args=", "public_key_suffix=",
@@ -780,6 +813,45 @@ class PasswordManager(object):
         print "error reading password file: ", str(e)
     return result
 
+def ZipWrite(zip_file, filename, arcname=None, perms=0o644,
+             compress_type=None):
+  import datetime
+
+  # http://b/18015246
+  # Python 2.7's zipfile implementation wrongly thinks that zip64 is required
+  # for files larger than 2GiB. We can work around this by adjusting their
+  # limit. Note that `zipfile.writestr()` will not work for strings larger than
+  # 2GiB. The Python interpreter sometimes rejects strings that large (though
+  # it isn't clear to me exactly what circumstances cause this).
+  # `zipfile.write()` must be used directly to work around this.
+  #
+  # This mess can be avoided if we port to python3.
+  saved_zip64_limit = zipfile.ZIP64_LIMIT
+  zipfile.ZIP64_LIMIT = (1 << 32) - 1
+
+  if compress_type is None:
+    compress_type = zip_file.compression
+  if arcname is None:
+    arcname = filename
+
+  saved_stat = os.stat(filename)
+
+  try:
+    # `zipfile.write()` doesn't allow us to pass ZipInfo, so just modify the
+    # file to be zipped and reset it when we're done.
+    os.chmod(filename, perms)
+
+    # Use a fixed timestamp so the output is repeatable.
+    epoch = datetime.datetime.fromtimestamp(0)
+    timestamp = (datetime.datetime(2009, 1, 1) - epoch).total_seconds()
+    os.utime(filename, (timestamp, timestamp))
+
+    zip_file.write(filename, arcname=arcname, compress_type=compress_type)
+  finally:
+    os.chmod(filename, saved_stat.st_mode)
+    os.utime(filename, (saved_stat.st_atime, saved_stat.st_mtime))
+    zipfile.ZIP64_LIMIT = saved_zip64_limit
+
 
 def ZipWriteStr(zip, filename, data, perms=0644, compression=None):
   # use a fixed timestamp so the output is repeatable.
@@ -817,6 +889,7 @@ class DeviceSpecificParams(object):
           info = imp.find_module(f, [d])
         print "loaded device-specific extensions from", path
         self.module = imp.load_module("device_specific", *info)
+        D("module = %s", self.module);
       except ImportError:
         print "unable to load device-specific module; assuming none"
 
@@ -844,6 +917,11 @@ class DeviceSpecificParams(object):
     """Called at the end of full OTA installation; typically this is
     used to install the image for the device's baseband processor."""
     return self._DoCall("FullOTA_InstallEnd")
+
+  def Install_Parameter(self):
+    """Called at the start of OTA installation; typically this is
+    used to install the parameter for the device's baseband processor"""
+    return self._DoCall("Install_Parameter")
 
   def IncrementalOTA_Assertions(self):
     """Called after emitting the block of assertions at the top of an
@@ -1074,19 +1152,21 @@ class BlockDifference:
                           self.tgt.TotalSha1(), self.partition))
 
   def _WriteUpdate(self, script, output_zip):
-    partition = self.partition
-    with open(self.path + ".transfer.list", "rb") as f:
-      ZipWriteStr(output_zip, partition + ".transfer.list", f.read())
-    with open(self.path + ".new.dat", "rb") as f:
-      ZipWriteStr(output_zip, partition + ".new.dat", f.read())
-    with open(self.path + ".patch.dat", "rb") as f:
-      ZipWriteStr(output_zip, partition + ".patch.dat", f.read(),
-                         compression=zipfile.ZIP_STORED)
+    ZipWrite(output_zip,
+             '{}.transfer.list'.format(self.path),
+             '{}.transfer.list'.format(self.partition))
+    ZipWrite(output_zip,
+             '{}.new.dat'.format(self.path),
+             '{}.new.dat'.format(self.partition))
+    ZipWrite(output_zip,
+             '{}.patch.dat'.format(self.path),
+             '{}.patch.dat'.format(self.partition),
+             compress_type=zipfile.ZIP_STORED)
 
-    call = (('block_image_update("%s", '
-             'package_extract_file("%s.transfer.list"), '
-             '"%s.new.dat", "%s.patch.dat");\n') %
-            (self.device, partition, partition, partition))
+    call = ('block_image_update("{device}", '
+            'package_extract_file("{partition}.transfer.list"), '
+            '"{partition}.new.dat", "{partition}.patch.dat");\n'.format(
+                device=self.device, partition=self.partition))
     script.AppendExtra(script._WordWrap(call))
 
   def _CheckFirstBlock(self, script):
